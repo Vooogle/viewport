@@ -78,7 +78,7 @@ jobs:
               -f body="$(cat <<'NOTES'
           Download the file for your platform below.
 
-          - **Windows** - `.exe` installer (no admin needed)
+          - **Windows** - `.exe` installer (no admin needed), or the `-portable.zip` if you'd rather not install anything
           - **Linux** - `.AppImage` (runs anywhere), or `.deb` / `.rpm`
           - **macOS** - `.dmg` (universal: Apple Silicon and Intel)
 
@@ -166,3 +166,16 @@ jobs:
           updaterJsonPreferNsis: true # .exe is our only Windows bundle
           retryAttempts: 3
           args: ${{ matrix.args }}
+
+      # Tauri has no "portable" bundle target of its own - this just zips the
+      # raw standalone exe so it can run without the NSIS installer.
+      - name: Portable Windows zip
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ needs.gate.outputs.tag }}"
+          $zip = "Viewport_${tag}_x64-portable.zip"
+          Compress-Archive -Path src-tauri/target/release/viewport.exe -DestinationPath $zip
+          gh release upload "$tag" $zip --repo "${{ github.repository }}" --clobber
