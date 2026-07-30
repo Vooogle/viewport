@@ -1,0 +1,36 @@
+[package]
+name = "viewport"
+version = "1.0.0"
+description = "Viewport — open-source video editor"
+authors = ["Viewport"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "viewport_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+# in-place updates from GitHub Releases (see plugins.updater in tauri.conf.json)
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# fetching + unpacking ffmpeg on first export (see ffmpeg.rs)
+ureq = "2"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+tar = "0.4"
+lzma-rs = "0.3"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

@@ -1,0 +1,29 @@
+# --- build output ---
+node_modules/
+dist/
+src-tauri/target/
+.vite/
+
+# ffmpeg is never committed — it's fetched into the app data dir on first export
+src-tauri/binaries/
+# stray export output (see src-tauri/.taurignore)
+src-tauri/*.mp4
+src-tauri/*.mov
+src-tauri/*.mkv
+src-tauri/*.webm
+src-tauri/*.gif
+src-tauri/*.wav
+
+# --- local dev helpers, not needed to build ---
+# the app builds with `npm run build` / `npm run tauri build`; the Python
+# scripts are just convenience launchers
+*.py
+MISSING_SVGS.md
+
+# --- editor / OS noise ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.local
+*.log

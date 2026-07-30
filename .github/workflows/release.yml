@@ -1,0 +1,168 @@
+# Builds Viewport for Windows, Linux and macOS and attaches the installers to a
+# GitHub release.
+#
+# Versioning: MAJOR.MINOR is a release (v1.0, v1.1); MAJOR.MINOR.PATCH is a small
+# change (v1.1.1) and does NOT build. GitHub's tag filters are globs with no `+`
+# quantifier — `v[0-9].[0-9]` would miss v1.10 — so every `v*` tag is accepted
+# here and the `gate` job decides with a real regex.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build (e.g. v1.1)'
+        required: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  gate:
+    name: Check tag / open draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+      tag: ${{ steps.check.outputs.tag }}
+      release_id: ${{ steps.draft.outputs.release_id }}
+    steps:
+      - id: check
+        shell: bash
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          # exactly MAJOR.MINOR — a third component means a patch, which we skip
+          if [[ "${TAG#v}" =~ ^[0-9]+\.[0-9]+$ ]]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "$TAG is a release — building."
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "$TAG is a patch tag — skipping the build."
+          fi
+
+      # Created once, here, instead of letting the three matrix jobs race to
+      # create it. tauri-action has no concurrency guard of its own; the
+      # supported way to share one release is to pass it a releaseId.
+      - id: draft
+        if: steps.check.outputs.build == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.check.outputs.tag }}
+        shell: bash
+        run: |
+          # a draft release has no public tag ref yet, so /releases/tags/<tag>
+          # can't find it — the list endpoint is the only way to look one up
+          find_id() {
+            gh api "repos/$REPO/releases" --paginate \
+              --jq ".[] | select(.tag_name==\"$TAG\") | .id" | head -n1
+          }
+          ID="$(find_id)"
+          if [ -z "$ID" ]; then
+            # read the id straight off the creation response instead of
+            # re-querying the list endpoint afterward - that re-query can
+            # race the list endpoint's read-after-write consistency and come
+            # back empty even though the release was just created successfully
+            ID="$(gh api "repos/$REPO/releases" -X POST \
+              -f tag_name="$TAG" \
+              -f target_commitish="$GITHUB_SHA" \
+              -f name="Viewport $TAG" \
+              -F draft=true \
+              -f body="$(cat <<'NOTES'
+          Download the file for your platform below.
+
+          - **Windows** - `.exe` installer (no admin needed)
+          - **Linux** - `.AppImage` (runs anywhere), or `.deb` / `.rpm`
+          - **macOS** - `.dmg` (universal: Apple Silicon and Intel)
+
+          The video encoder (ffmpeg) is downloaded once on your first export,
+          so the installers stay small.
+          NOTES
+          )" --jq '.id')"
+          fi
+          echo "release_id=$ID" >> "$GITHUB_OUTPUT"
+          echo "Draft release id: $ID"
+
+  build:
+    name: ${{ matrix.name }}
+    needs: gate
+    if: needs.gate.outputs.build == 'true'
+    timeout-minutes: 60 # a hung Rust build would otherwise sit for GitHub's 6h default
+    strategy:
+      fail-fast: false # one platform failing shouldn't discard the others' work
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            args: ''
+          # AppImage links against the build machine's glibc, so build on the
+          # OLDEST distro we support — ubuntu-latest would cut off older systems
+          - name: Linux x64 (AppImage / deb / rpm)
+            os: ubuntu-22.04
+            args: ''
+          # one universal binary instead of separate Intel/ARM downloads
+          - name: macOS (universal)
+            os: macos-14
+            args: '--target universal-apple-darwin'
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.tag }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # both arches so the universal macOS build can link
+          targets: ${{ matrix.os == 'macos-14' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # WebKitGTK is the Linux webview; the rest is what the bundlers need
+      - name: Linux build dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            build-essential \
+            file \
+            rpm
+
+      - run: npm ci
+
+      # ffmpeg is deliberately NOT bundled — it's fetched into the app data dir
+      # on first export, so nothing extra is needed here.
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # signing keys for the updater — bundles are rejected without a valid
+          # signature. Generate with `npm run tauri signer generate`.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          # upload into the draft the gate job already opened
+          releaseId: ${{ needs.gate.outputs.release_id }}
+          # latest.json is what the in-app updater reads. All three runners write
+          # it into the same release, so retries cover the write race.
+          includeUpdaterJson: true
+          updaterJsonPreferNsis: true # .exe is our only Windows bundle
+          retryAttempts: 3
+          args: ${{ matrix.args }}

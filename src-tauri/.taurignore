@@ -1,0 +1,12 @@
+# Files the dev watcher must ignore. Exported videos land here if anything ever
+# resolves a relative output path against the crate dir, and a rebuild mid-export
+# restarts the app and kills the encode.
+*.mp4
+*.mov
+*.mkv
+*.webm
+*.gif
+*.wav
+*.png
+*.log
+binaries/
