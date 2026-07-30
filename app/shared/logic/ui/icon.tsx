@@ -36,8 +36,8 @@ export function Icon({ name, size = 20, title }: IconProps) {
       style={{
         width: size,
         height: size,
-        maskImage: `url(${url})`,
-        WebkitMaskImage: `url(${url})`,
+        maskImage: `url("${url}")`,
+        WebkitMaskImage: `url("${url}")`,
       }}
     />
   )
